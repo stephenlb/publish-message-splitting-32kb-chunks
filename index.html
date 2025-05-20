@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PubNub Large Message Splitter Demo</title>
+    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.9.5.2.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            resize: vertical;
+        }
+        pre {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .log {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+            font-family: monospace;
+        }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .disconnected {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+    </style>
+</head>
+<body>
+    <h1>PubNub Large Message Splitter Demo</h1>
+    <p>This demo shows how to split large JSON messages (>32KB) into smaller chunks and reassemble them on subscribe.</p>
+    
+    <div class="status" id="connection-status">Connection status: Initializing...</div>
+    
+    <div class="container">
+        <div class="panel">
+            <h2>Send Large Message</h2>
+            <p>Enter a large JSON message (it will be auto-generated if empty):</p>
+            <textarea id="message-input" placeholder="Enter JSON or leave empty to generate a large JSON automatically"></textarea>
+            <div>
+                <button id="generate-btn">Generate Large JSON (500KB)</button>
+                <button id="publish-btn">Publish</button>
+            </div>
+            <div>Message Size: <span id="message-size">0</span> bytes</div>
+            <div class="log" id="publish-log">Publisher log will appear here</div>
+        </div>
+        
+        <div class="panel">
+            <h2>Received Messages</h2>
+            <div>
+                <button id="clear-btn">Clear</button>
+            </div>
+            <pre id="received-message">Reassembled messages will appear here</pre>
+            <div class="log" id="subscribe-log">Subscriber log will appear here</div>
+        </div>
+    </div>
+
+    <script>
+        // PubNub Configuration
+        const PUBLISH_KEY = 'demo';
+        const SUBSCRIBE_KEY = 'demo';
+        const CHANNEL = 'large-message-demo';
+        const CHUNK_SIZE = 10000; // Bytes, slightly less than 32KB to allow for metadata
+        const USER_ID = 'demo-user-' + Math.floor(Math.random() * 1000);
+        
+        // Initialize PubNub
+        const pubnub = new PubNub({
+            publishKey: PUBLISH_KEY,
+            subscribeKey: SUBSCRIBE_KEY,
+            userId: USER_ID
+        });
+        
+        // DOM Elements
+        const messageInput = document.getElementById('message-input');
+        const publishBtn = document.getElementById('publish-btn');
+        const generateBtn = document.getElementById('generate-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const receivedMessage = document.getElementById('received-message');
+        const publishLog = document.getElementById('publish-log');
+        const subscribeLog = document.getElementById('subscribe-log');
+        const messageSizeEl = document.getElementById('message-size');
+        const connectionStatus = document.getElementById('connection-status');
+        
+        // Message Buffer for Reassembly
+        const messageBuffer = {};
+
+        // Utility Functions
+        function updateMessageSize() {
+            const size = new TextEncoder().encode(messageInput.value).length;
+            messageSizeEl.textContent = size.toLocaleString();
+            return size;
+        }
+        
+        function logPublish(message) {
+            publishLog.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${message}</div>`;
+            publishLog.scrollTop = publishLog.scrollHeight;
+        }
+        
+        function logSubscribe(message) {
+            subscribeLog.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${message}</div>`;
+            subscribeLog.scrollTop = subscribeLog.scrollHeight;
+        }
+        
+        // Generate a large JSON object
+        function generateLargeJSON(sizeInKB = 500) {
+            logPublish(`Generating large JSON (~${sizeInKB}KB)...`);
+            
+            const items = [];
+            const targetSize = sizeInKB * 1024;
+            let currentSize = 0;
+            
+            while (currentSize < targetSize) {
+                const item = {
+                    id: Math.floor(Math.random() * 1000000),
+                    name: `Item ${items.length}`,
+                    description: `This is a sample item with a longer description to increase the size of the JSON. ${Math.random().toString(36).substring(2, 15)}`,
+                    timestamp: Date.now(),
+                    data: Array.from({ length: 100 }, () => Math.floor(Math.random() * 100)), // Array of 100 random numbers
+                    metadata: {
+                        created: new Date().toISOString(),
+                        author: 'PubNub Demo',
+                        tags: ['large', 'message', 'demo', 'chunking', 'test', Math.random().toString(36).substring(2, 10)],
+                        isActive: Math.random() > 0.5,
+                        priority: Math.floor(Math.random() * 10),
+                        nestedData: {
+                            level1: {
+                                level2: {
+                                    level3: {
+                                        deepValue: Math.random().toString(36).substring(2, 15)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                items.push(item);
+                
+                // Approximate size calculation
+                const itemJson = JSON.stringify(item);
+                currentSize += new TextEncoder().encode(itemJson).length;
+            }
+            
+            const largeObject = {
+                title: 'Large JSON Message Demo',
+                description: 'This is a demonstration of splitting and reassembling large JSON messages with PubNub',
+                timestamp: Date.now(),
+                items: items
+            };
+            
+            const json = JSON.stringify(largeObject, null, 2);
+            messageInput.value = json;
+            updateMessageSize();
+            
+            logPublish(`Generated JSON of size: ${new TextEncoder().encode(json).length.toLocaleString()} bytes`);
+            return json;
+        }
+        
+        // Split a large message into smaller chunks
+        function splitMessage(message) {
+            const encoder = new TextEncoder();
+            const messageBytes = encoder.encode(message);
+            const totalSize = messageBytes.length;
+            
+            // Calculate number of chunks needed
+            const numChunks = Math.ceil(totalSize / CHUNK_SIZE);
+            logPublish(`Splitting message into ${numChunks} chunks`);
+            
+            const chunks = [];
+            const messageId = Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
+            
+            for (let i = 0; i < numChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, totalSize);
+                const chunkBytes = messageBytes.slice(start, end);
+                
+                // Convert bytes back to string
+                const decoder = new TextDecoder();
+                const chunkData = decoder.decode(chunkBytes);
+                
+                chunks.push({
+                    type: 'chunk',
+                    messageId: messageId,
+                    chunkIndex: i,
+                    totalChunks: numChunks,
+                    data: chunkData,
+                    timestamp: Date.now()
+                });
+            }
+            
+            return chunks;
+        }
+        
+        // Reassemble the chunks into the original message
+        function reassembleMessage(messageId) {
+            if (!messageBuffer[messageId] || 
+                !messageBuffer[messageId].chunks || 
+                Object.keys(messageBuffer[messageId].chunks).length !== messageBuffer[messageId].totalChunks) {
+                return null;
+            }
+            
+            // Get all chunks in order
+            const chunks = [];
+            for (let i = 0; i < messageBuffer[messageId].totalChunks; i++) {
+                if (!messageBuffer[messageId].chunks[i]) {
+                    return null; // Missing a chunk
+                }
+                chunks.push(messageBuffer[messageId].chunks[i]);
+            }
+            
+            // Combine all data parts
+            const reassembled = chunks.map(chunk => chunk.data).join('');
+            
+            // Try to parse the JSON
+            try {
+                const parsedJSON = JSON.parse(reassembled);
+                return { success: true, data: parsedJSON, raw: reassembled };
+            } catch (e) {
+                logSubscribe(`Error parsing reassembled JSON: ${e.message}`);
+                return { success: false, error: e.message, raw: reassembled };
+            }
+        }
+        
+        // Publish a large message by splitting it into chunks
+        async function publishLargeMessage(message) {
+            const chunks = splitMessage(message);
+            logPublish(`Starting to publish ${chunks.length} chunks...`);
+            
+            for (let i = 0; i < chunks.length; i++) {
+                try {
+                    await pubnub.publish({
+                        channel: CHANNEL,
+                        message: chunks[i]
+                    });
+                    logPublish(`Published chunk ${i + 1}/${chunks.length}`);
+                } catch (err) {
+                    logPublish(`Error publishing chunk ${i + 1}: ${err.message}`);
+                    return false;
+                }
+            }
+            
+            logPublish('All chunks published successfully!');
+            return true;
+        }
+        
+        // Subscribe to the channel
+        function setupSubscribe() {
+            // Create a channel entity
+            const channel = pubnub.channel(CHANNEL);
+            
+            // Create a subscription
+            const subscription = channel.subscription();
+            
+            // Add status listener
+            pubnub.addListener({
+                status: (statusEvent) => {
+                    console.log("Status event:", statusEvent);
+                    
+                    if (statusEvent.category === "PNConnectedCategory") {
+                        connectionStatus.className = "status connected";
+                        connectionStatus.textContent = `Connected as ${USER_ID}`;
+                        logSubscribe(`Connected to channel: ${CHANNEL}`);
+                    } else if (statusEvent.category === "PNNetworkDownCategory" || 
+                               statusEvent.category === "PNDisconnectedCategory") {
+                        connectionStatus.className = "status disconnected";
+                        connectionStatus.textContent = "Disconnected";
+                        logSubscribe(`Disconnected from PubNub: ${statusEvent.category}`);
+                    }
+                }
+            });
+            
+            // Add a message listener
+            subscription.onMessage = (event) => {
+                const message = event.message;
+                
+                // Check if this is a message chunk
+                if (message.type === 'chunk') {
+                    logSubscribe(`Received chunk ${message.chunkIndex + 1}/${message.totalChunks} for message ${message.messageId}`);
+                    
+                    // Initialize buffer for this message if needed
+                    if (!messageBuffer[message.messageId]) {
+                        messageBuffer[message.messageId] = {
+                            totalChunks: message.totalChunks,
+                            receivedChunks: 0,
+                            chunks: {},
+                            timestamp: Date.now()
+                        };
+                    }
+                    
+                    // Store the chunk
+                    messageBuffer[message.messageId].chunks[message.chunkIndex] = message;
+                    messageBuffer[message.messageId].receivedChunks++;
+                    
+                    // Check if we have all chunks
+                    if (messageBuffer[message.messageId].receivedChunks === message.totalChunks) {
+                        logSubscribe(`All ${message.totalChunks} chunks received for message ${message.messageId}. Reassembling...`);
+                        
+                        const result = reassembleMessage(message.messageId);
+                        if (result && result.success) {
+                            receivedMessage.textContent = JSON.stringify(result.data, null, 2);
+                            logSubscribe(`Message reassembled successfully! Size: ${new TextEncoder().encode(result.raw).length.toLocaleString()} bytes`);
+                            
+                            // Clean up the buffer
+                            delete messageBuffer[message.messageId];
+                        } else {
+                            logSubscribe(`Failed to reassemble message: ${result ? result.error : 'Unknown error'}`);
+                        }
+                    }
+                } else {
+                    // Regular message
+                    logSubscribe(`Received regular message: ${JSON.stringify(message)}`);
+                    receivedMessage.textContent = JSON.stringify(message, null, 2);
+                }
+            };
+            
+            // Subscribe to the channel
+            subscription.subscribe();
+        }
+        
+        // Event Listeners
+        publishBtn.addEventListener('click', async () => {
+            let message = messageInput.value.trim();
+            
+            if (!message) {
+                message = generateLargeJSON();
+            }
+            
+            const size = updateMessageSize();
+            logPublish(`Publishing message of size: ${size.toLocaleString()} bytes`);
+            
+            if (size > 0) {
+                if (size > 32 * 1024) {
+                    logPublish(`Message exceeds 32KB (${size.toLocaleString()} bytes). Splitting into chunks...`);
+                    await publishLargeMessage(message);
+                } else {
+                    logPublish(`Message is under 32KB. Publishing as a single message...`);
+                    try {
+                        const parsedMessage = JSON.parse(message);
+                        await pubnub.publish({
+                            channel: CHANNEL,
+                            message: parsedMessage
+                        });
+                        logPublish('Message published successfully!');
+                    } catch (err) {
+                        logPublish(`Error publishing message: ${err.message}`);
+                    }
+                }
+            } else {
+                logPublish('Please enter a message to publish');
+            }
+        });
+        
+        generateBtn.addEventListener('click', () => {
+            generateLargeJSON();
+        });
+        
+        clearBtn.addEventListener('click', () => {
+            receivedMessage.textContent = 'Reassembled messages will appear here';
+            subscribeLog.innerHTML = '';
+        });
+        
+        messageInput.addEventListener('input', updateMessageSize);
+        
+        // Initialize
+        setupSubscribe();
+        logPublish('Publisher initialized');
+        logSubscribe('Subscriber initialized');
+    </script>
+</body>
+</html>
