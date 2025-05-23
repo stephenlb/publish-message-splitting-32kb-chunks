@@ -82,9 +82,15 @@
             background-color: #f2dede;
             color: #a94442;
         }
+        #latency-display {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
+    <div id="latency-display">End-to-End Latency: N/A</div>
     <h1>PubNub Large Message Splitter Demo</h1>
     <p>This demo shows how to split large JSON messages (>32KB) into smaller chunks and reassemble them on subscribe.</p>
     
@@ -114,6 +120,8 @@
     </div>
 
     <script>
+        // Latency Tracking
+        const publishTimes = {};
         // PubNub Configuration
         const PUBLISH_KEY = 'demo';
         const SUBSCRIBE_KEY = 'demo';
@@ -138,6 +146,7 @@
         const subscribeLog = document.getElementById('subscribe-log');
         const messageSizeEl = document.getElementById('message-size');
         const connectionStatus = document.getElementById('connection-status');
+        const latencyDisplay = document.getElementById('latency-display');
         
         // Message Buffer for Reassembly
         const messageBuffer = {};
@@ -160,7 +169,7 @@
         }
         
         // Generate a large JSON object
-        function generateLargeJSON(sizeInKB = 20) {
+        function generateLargeJSON(sizeInKB = 190) {
             logPublish(`Generating large JSON (~${sizeInKB}KB)...`);
             
             const items = [];
@@ -307,6 +316,8 @@
         async function publishLargeMessage(message) {
             const chunks = splitMessage(message);
             logPublish(`Starting to publish ${chunks.length} chunks...`);
+            const messageId = chunks[0].messageId;
+            publishTimes[messageId] = Date.now();
 
             try {
                 const publishPromises = chunks.map((chunk, index) =>
@@ -384,6 +395,13 @@
                             receivedMessage.textContent = JSON.stringify(result.data, null, 2);
                             logSubscribe(`Message reassembled successfully! Size: ${new TextEncoder().encode(result.raw).length.toLocaleString()} bytes`);
                             
+                            // Compute and display latency
+                            const startTime = publishTimes[message.messageId];
+                            if (startTime) {
+                                const latency = Date.now() - startTime;
+                                latencyDisplay.textContent = `End-to-End Latency: ${latency.toLocaleString()} ms`;
+                                delete publishTimes[message.messageId];
+                            }
                             // Clean up the buffer
                             delete messageBuffer[message.messageId];
                         } else {
